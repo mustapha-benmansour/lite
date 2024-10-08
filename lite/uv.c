@@ -12,7 +12,7 @@
 #include <uv/version.h>
 
 
-#include "ws_parser/ws_parser.h"
+#include "deps/ws_parser/ws_parser.h"
 
 
 
@@ -1421,7 +1421,7 @@ static void lite_multi_timer_cb(CURLM *multi, long timeout_ms, void *userp) {
 */
 
 
-extern int luaopen_core_uv(lua_State * L){
+extern int luaopen_lite_uv(lua_State * L){
     lite_uv_handle_reg(L); // handle_mt at -1
     // reg handle_mt subclasses
     lite_signal_reg(L);
