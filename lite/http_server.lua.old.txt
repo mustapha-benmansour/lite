@@ -1,0 +1,231 @@
+
+
+local HTTP_SERVER_VERSION="1.0"
+
+local lite=require'lite'
+
+
+local req_mt
+do
+    local tcp=lite.tcp()
+    local name,value=debug.getupvalue(getmetatable(tcp).read_http_start,1)
+    req_mt=value 
+    tcp:close()
+end
+
+
+function req_mt:headers_raw()
+    return self._headers_raw
+end
+
+local ckhkeys={
+    Cookie=true,
+    cookie=true,
+    ['Set-Cookie']=true,
+    ['set-cookie']=true,
+}
+
+function req_mt:headers()
+    if not self._headers then
+        self._headers={}
+        self._headers._icookies={}
+        if self._headers_raw then
+            for line in self._headers_raw:gmatch'[^\r\n]+' do
+                local k,v =line:match'^([^:]+): (.+)$'
+                assert(k and v)
+                if ckhkeys[k] then
+                    self._headers._icookies[#self._headers._icookies+1] = v
+                else
+                    self._headers[k]=v
+                end
+            end
+        end
+    end
+    return self._headers
+end
+function req_mt:header(k)
+    return self._headers and self._headers[k] or self:headers()[k]
+end
+
+
+function req_mt:cookies()
+    if not self._cookies then
+        local icookies=self:headers()._icookies
+        self._cookies={}
+        -- this is a simple parse for test
+        for _,v in ipairs(icookies) do
+            local k,v =v:match'^([^=]+)%s*=%s*(.+)$'
+            assert(k and v)
+            self._cookies[k]=v
+        end
+    end
+    return self._cookies
+end
+
+function req_mt:cookies_raw()
+    return table.concat(self:cookies(),'\r\n');
+end
+
+function req_mt:cookie(k)
+    return self._cookies and self._cookies[k] or self:cookies()[k]
+end
+
+local res_mt={}
+res_mt.__index=res_mt
+
+function res_mt:header(k,v)
+    assert(#self._buf==0,'headers already sent')
+    if k:match'[Cc]ontent%-[Tt]ype' then
+        self._content_type=v
+    else
+        self._headers[#self._headers+1] = k..': '..v
+    end
+    return self
+end
+function res_mt:status(code,text)
+    self._status_code=code
+    self._status_text=text
+    return self
+end
+
+
+--[[
+function res_mt:flush()
+    local data=table.concat(self._buf)
+    self._tcp:write(data)
+    return self
+end
+]]
+
+function res_mt:write(data)
+    table.insert(self._buf,data)
+    return self
+end
+
+
+local server_version=('http_server/v%s %s'):format(HTTP_SERVER_VERSION,lite.version()) 
+local function res_header(opt)
+    assert(opt.content_length)
+    return table.concat({
+        ('HTTP/1.1 %d %s'):format(opt.status_code or 200,opt.status_text or 'OK'),
+        ('Content-Type: %s'):format(opt.content_type or 'text/html'),
+        ('Content-Length: %d'):format(opt.content_length),
+        ('Date: %s'):format(opt.date or os.date('!%a, %d %b %Y %X GMT')),
+        ('Server: %s'):format(opt.server or server_version),
+        opt.headers and (table.concat(opt.headers,'\r\n')..'\r\n') or '\r\n',
+    },'\r\n')
+end
+
+
+
+local scode_to_name=lite.http_status_name
+local function res_error(tcp,scode,stext,content_type,content)
+    if not scode then
+        scode=500
+    end
+    --TODO resolve  stext if not is set 
+    if not stext then
+        stext=scode_to_name(scode)
+    end
+    content=content or (stext..'\n')
+    content_type=content_type or 'text/html'
+    content=content or ''
+    local header=res_header{
+        status_code=scode,
+        status_text=stext,
+        content_type=content_type,
+        content_length=#content
+    }
+    tcp:try_write(header)
+    tcp:try_write(content)
+    tcp:close()
+end
+
+function res_mt:done()
+    self._tcp:read_stop()
+    local data=table.concat(self._buf)
+    local header=res_header{
+        status_code=self._status_code,
+        status_text=self._status_text,
+        content_type=self._content_type,
+        content_length=#data
+    }
+    self._tcp:try_write(header)
+    if #data<4096 then
+        self._tcp:try_write(data)
+        self._tcp:close()
+    else
+        self._tcp:write(data,function (ok,err)
+            if not ok then print(err) end
+            self._tcp:close()
+        end)
+    end
+end
+
+
+
+
+
+
+
+
+local hs_mt={}
+hs_mt.__index=hs_mt
+
+
+function hs_mt:start()
+    --todo assert(not already started)
+    self._clients={n=0,c=0,d=0}
+    self._server:listen(128,function (ok,err)
+        if not ok then
+            print(err)
+        else
+            local tcp=assert(lite.tcp())
+            assert(self._server:accept(tcp))
+            ---self._clients[tcp]=true
+            self._clients.n=self._clients.n+1
+            self._clients.c=self._clients.c+1
+            if self._clients.c%10000==0 then
+                print(('mem %5dKB connect %7d disconnect %7d online %7d'):format(collectgarbage('count'),self._clients.c,self._clients.d,self._clients.n))
+            end
+            tcp:on_close(function ()
+                self._clients[tcp]=nil
+                self._clients.n=self._clients.n-1
+                self._clients.d=self._clients.d+1
+                tcp=nil
+                if self._clients.d%10000==0 then
+                    print(('mem %5dKB connect %7d disconnect %7d online %7d'):format(collectgarbage('count'),self._clients.c,self._clients.d,self._clients.n))
+                end
+            end)
+            tcp:read_http_start(function(req,err,err_n)
+                if not req then
+                    print(err)
+                    res_error(tcp,500)
+                else
+                    tcp:read_stop()
+                    local res=setmetatable({
+                        _status_code=200,
+                        _status_text='OK',
+                        _headers={},
+                        _buf={},
+                        _tcp=tcp,
+                        _body_status=false,
+                    },res_mt)
+                    local ok,err=pcall(self._f,req,res)
+                    if not ok then
+                        print(err)
+                        res_error(tcp,500)
+                    end
+                end
+                --client:write(response)
+            end)
+            tcp=nil
+        end
+    end)
+end
+
+return function (ip,port,f)
+    local server=assert(lite.tcp())
+    assert(server:bind(ip or '0.0.0.0',port or 80))
+    return setmetatable({_server=server,_f=f},hs_mt)
+end

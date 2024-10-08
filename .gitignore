@@ -1,0 +1,4 @@
+*.so
+test.lua
+webpage/
+base64.lua
