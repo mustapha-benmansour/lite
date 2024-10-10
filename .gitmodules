@@ -1,6 +1,3 @@
 [submodule "ws_parser"]
 	path = ws_parser
 	url = https://github.com/haileys/ws_parser
-[submodule "lite/deps/ws_parser"]
-	path = lite/deps/ws_parser
-	url = https://github.com/haileys/ws_parser
