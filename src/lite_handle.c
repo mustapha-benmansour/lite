@@ -43,7 +43,7 @@ void lite_handle_close_cb(uv_handle_t * handle){
     lite_handle_t * h=handle->data;
     lite_loop_t * ctx = (lite_loop_t*)handle->loop->data;
     lua_State * L = ctx->L;
-    RF_UNSET(h->on_primary)
+    RF_UNSET_IFSET(h->on_primary)
     if (RF_ISSET(h->on_close)){
         RF_GET(h->on_close)
         RF_UNSET(h->on_close)

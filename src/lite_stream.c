@@ -15,8 +15,7 @@ static void connection_cb(uv_stream_t *stream,int status){
     if (status<0){
         lua_pushnil(L);
         lua_pushstring(L, uv_err_name(status));
-        lua_pushinteger(L, status);
-        n=3;
+        n=2;
     }else{
         lua_pushboolean(L, 1);
         n=1;
@@ -45,7 +44,7 @@ static int stream_accept(lua_State * L){
     lite_handle_t * h2 = *((lite_handle_t **)lua_touserdata(L, 2));
     int rc=uv_accept(&h->stream,&h2->stream);
     if (rc<0) return lite_uv_throw(L, rc);
-    return 1;
+    return 0;
 }
 
 
@@ -60,6 +59,7 @@ static void read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf){
     lite_loop_t * ctx = stream->loop->data;
     lua_State * L = ctx->L;
     if (nread>0){
+#ifdef LITE_WSPARSER
         if (h->ws){
             h->ws->state=1;
             int rc=ws_parser_execute(&h->ws->p,&h->ws->s,h,buf->base,nread);
@@ -83,7 +83,10 @@ static void read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf){
             }else{
                 h->ws->state=0;
             }
-        }else if (h->http){
+        }else 
+#endif
+#ifdef LITE_LLHTTP
+        if (h->http){
             h->http->state=1;
             int rc=llhttp_execute(&h->http->p, buf->base,nread);
             free(buf->base);
@@ -108,7 +111,9 @@ static void read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf){
             }else{
                 h->http->state=0;
             }
-        }else{
+        }else
+#endif
+        {
             RF_GET(h->on_primary)
             lua_pushlstring(L, buf->base, nread);
             free(buf->base);
@@ -117,7 +122,7 @@ static void read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf){
                 uv_stop(&ctx->loop);
             } 
         }
-        return;
+            return;
     }
     if (buf->base)
         free(buf->base);
