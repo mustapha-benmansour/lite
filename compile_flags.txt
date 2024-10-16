@@ -1,4 +1,6 @@
 -I/usr/include/lua5.1
 -I/usr/local/include
--I.
--DLITE_HTTP
+-DLITE_CURL
+-DLITE_LLHTTP
+-DLITE_WSPARSER
+-DLITE_CJSON

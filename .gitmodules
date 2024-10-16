@@ -1,3 +1,6 @@
 [submodule "ws_parser"]
 	path = ws_parser
 	url = https://github.com/haileys/ws_parser
+[submodule "deps/lua-cjson"]
+	path = deps/lua-cjson
+	url = https://github.com/mpx/lua-cjson

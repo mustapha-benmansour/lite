@@ -320,7 +320,7 @@ static int final(lua_State * L){
     return 1;
 }
 
-extern int luaopen_lite_sha1(lua_State * L){
+extern int luaopen_sha1(lua_State * L){
     lua_newtable(L);
     lua_pushvalue(L, -1);
     lua_setfield(L, -2, "__index");
