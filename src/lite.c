@@ -13,6 +13,17 @@ static int version(lua_State * L){
 }
 
 
+int lite_error_nomem(lua_State * L){
+    lua_pushnil(L);
+    lua_pushliteral(L, "ENOMEM");
+    return 2;
+}
+int lite_error_nomem_throw(lua_State * L){
+    lua_pushliteral(L, "ENOMEM");
+    return lua_error(L);
+}
+
+
 extern int luaopen_lite(lua_State * L){
 
 #ifdef LITE_CURL

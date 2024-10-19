@@ -10,7 +10,9 @@
 #define LITE_HTTP_MT "lite.http"
 
 int lite_http_status_name(lua_State * L){
-    int status=luaL_checkint(L, 1);
+    if (lua_type(L,1)!=LUA_TNUMBER)
+        return lite_error_invalid_arg(L);
+    int status=lua_tointeger(L, 1);
     lua_pushstring(L, llhttp_status_name(status));
     return 1;
 }
@@ -169,7 +171,7 @@ static int M_http_reset_cb(llhttp_t * hp){return 0;}
 int lite_http_use_parser(lua_State * L,lite_handle_t * h){
     if (h->http) return 0;
     h->http=malloc(sizeof(lite_http_t));
-    if (!h->http) return lite_uv_throw(L, UV_ENOMEM);
+    if (!h->http) return lite_error_nomem(L);
     h->http->state=0;
     h->http->error=LUA_NOREF;
     llhttp_settings_init(&h->http->s);
@@ -197,7 +199,7 @@ int lite_http_use_parser(lua_State * L,lite_handle_t * h){
     h->http->s.on_reset=M_http_reset_cb;
     llhttp_init(&h->http->p, HTTP_REQUEST,&h->http->s);
     h->http->p.data=h;
-    return 0;
+    return lite_success(L);
 }
 
 

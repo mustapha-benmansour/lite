@@ -29,14 +29,17 @@ static void connection_cb(uv_stream_t *stream,int status){
 
 static int stream_listen(lua_State * L){
     lite_handle_t * h = *((lite_handle_t **)lua_touserdata(L, 1));
-    int backlog=luaL_checkint(L, 2);
-    luaL_checktype(L, 3, LUA_TFUNCTION);
+    if (lua_type(L, 2)!=LUA_TNUMBER)
+        return lite_error_invalid_arg(L);
+    int backlog=lua_tointeger(L, 2);
+    if (!lua_isfunction(L, 3))
+        return lite_error_invalid_arg(L);
     RF_UNSET_IFSET(h->on_primary)
     lua_settop(L, 3);
     RF_SET(h->on_primary)
     int rc=uv_listen(&h->stream,backlog,connection_cb);
     if (rc<0) return lite_uv_throw(L, rc);
-    return 0;
+    return lite_success(L);
 }
 
 static int stream_accept(lua_State * L){
@@ -44,7 +47,7 @@ static int stream_accept(lua_State * L){
     lite_handle_t * h2 = *((lite_handle_t **)lua_touserdata(L, 2));
     int rc=uv_accept(&h->stream,&h2->stream);
     if (rc<0) return lite_uv_throw(L, rc);
-    return 0;
+    return lite_success(L);
 }
 
 
@@ -139,8 +142,10 @@ static void read_cb(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf){
 
 int lite_stream_parser(lua_State * L){
     lite_handle_t * h=*((lite_handle_t **)lua_touserdata(L, 1));
+    if (lua_type(L, 2)!=LUA_TSTRING)
+        return lite_error_invalid_arg(L);
     size_t sz ;
-    const char * t=luaL_checklstring(L, 2, &sz);
+    const char * t=lua_tolstring(L, 2, &sz);
 #ifdef LITE_WSPARSER
     if (sz==2 && t[0]=='w' && t[1]=='s'){
 #ifdef LITE_LLHTTP
@@ -171,20 +176,23 @@ int lite_stream_parser(lua_State * L){
         return lite_http_use_parser(L,h);
     }
 #endif
-    return luaL_error(L, "unsupported parser");
+    lua_pushnil(L);
+    lua_pushliteral(L, "unsupported parser");
+    return 2;
 }
 
 
 
 static int stream_read_start(lua_State * L){
     lite_handle_t * h = *((lite_handle_t **)lua_touserdata(L, 1));
-    luaL_checktype(L, 2, LUA_TFUNCTION);
+    if (!lua_isfunction(L, 2))
+        return lite_error_invalid_arg(L);
     RF_UNSET_IFSET(h->on_primary)
     lua_settop(L, 2);
     RF_SET(h->on_primary)
     int rc=uv_read_start(&h->stream,alloc_cb,read_cb);
     if (rc<0) return lite_uv_throw(L, rc);
-    return 0;
+    return lite_success(L);
 }
 
 static int stream_read_stop(lua_State * L){
@@ -233,9 +241,11 @@ static int stream_write(lua_State * L){
     }
     int f_idx=0;
     int rc;
-    luaL_checktype(L, 2, LUA_TSTRING);
+    if (lua_type(L, 2)!=LUA_TSTRING)
+        return lite_error_invalid_arg(L);
     if (lua_gettop(L)>2){
-        luaL_checktype(L, 3, LUA_TFUNCTION);
+        if (!lua_isfunction(L, 3))
+            return lite_error_invalid_arg(L);
         f_idx=3;
     }
     lite_req_t * r = malloc(sizeof(lite_req_t));
@@ -269,7 +279,7 @@ static int stream_write(lua_State * L){
         free(r);
         goto errrc;
     }
-    return 0;
+    return lite_success(L);
 einval:
     rc=UV_EINVAL;
 enomem:
@@ -282,8 +292,10 @@ errrc:
 static int stream_try_write(lua_State * L){
     lite_handle_t * h = *((lite_handle_t **)lua_touserdata(L, 1));
     int rc=0;
+    if (lua_type(L, 2)!=LUA_TSTRING)
+        return lite_error_invalid_arg(L);
     size_t sz;
-    const char * str=luaL_checklstring(L, 2, &sz);
+    const char * str=lua_tolstring(L, 2, &sz);
     if (!sz) return 0;
     char * p=(char *)str;
     uv_buf_t buf;
@@ -295,7 +307,7 @@ static int stream_try_write(lua_State * L){
         rc=uv_try_write(&h->stream,&buf,1);
     }while(rc>-1 && rc<sz);
     if(rc<0) return lite_uv_throw(L, rc);
-    return 0;
+    return lite_success(L);
 }
 
 static void shutdown_cb(uv_shutdown_t* shutdown_req, int status) {
@@ -316,7 +328,8 @@ static void shutdown_cb(uv_shutdown_t* shutdown_req, int status) {
 
 static int stream_shutdown(lua_State * L){
     lite_handle_t * h = *((lite_handle_t **)lua_touserdata(L, 1));
-    luaL_checktype(L, 2, LUA_TFUNCTION);
+    if (!lua_isfunction(L, 2))
+        return lite_error_invalid_arg(L);
     lite_req_t * r = malloc(sizeof(lite_req_t));
     if (!r) return lite_uv_throw(L, UV_ENOMEM);
     r->shutdown.data=r;
@@ -331,7 +344,7 @@ static int stream_shutdown(lua_State * L){
         free(r);
         return lite_uv_throw(L, rc);
     }
-    return 0;
+    return lite_success(L);
 }
 
 

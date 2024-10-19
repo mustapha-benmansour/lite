@@ -84,7 +84,8 @@ int lite_handle_gc(lua_State * L){
 
 static int handle_on_close(lua_State * L){
     lite_handle_t ** hp = lua_touserdata(L, 1);
-    luaL_checktype(L, 2,LUA_TFUNCTION);
+    if (lua_isfunction(L, 2))
+        return lite_error_invalid_arg(L);
     RF_UNSET_IFSET((*hp)->on_close)
     lua_settop(L, 2);
     RF_SET((*hp)->on_close);

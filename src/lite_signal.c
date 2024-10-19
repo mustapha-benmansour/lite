@@ -11,7 +11,7 @@
 int lite_signal(lua_State * L){
     lite_loop_t * ctx = lua_touserdata(L, lua_upvalueindex(1));
     lite_handle_t ** hp=lite_handle(L);
-    if (!hp) return lite_uv_throw(L, ENOMEM);
+    if (!hp) return lite_error_nomem(L);
     luaL_getmetatable(L, LITE_SIGNAL_MT);
     lua_setmetatable(L, -2);
     int rc=uv_signal_init(&ctx->loop, &(*hp)->signal);
@@ -33,20 +33,24 @@ static void  signal_cb(uv_signal_t * handle,int signum){
 
 static int signal_start(lua_State * L){
     lite_handle_t * h = *((lite_handle_t **)lua_touserdata(L, 1));
-    int signum=luaL_checkinteger(L, 2);
-    luaL_checktype(L, 3, LUA_TFUNCTION);
+    if (lua_type(L, 2)!=LUA_TNUMBER)
+        return lite_error_invalid_arg(L);
+    int signum=lua_tointeger(L, 2);
+    if (!lua_isfunction(L, 3))
+        return lite_error_invalid_arg(L);
     RF_UNSET_IFSET(h->on_primary)
     lua_settop(L, 3);
     RF_SET(h->on_primary)
     int rc=uv_signal_start(&h->signal,signal_cb,signum);
     if (rc<0) return lite_uv_throw(L, rc);
-    return 0;
+    return lite_success(L);
 }
 
 static int signal_stop(lua_State * L){
     lite_handle_t * h = *((lite_handle_t **)lua_touserdata(L, 1));
-    uv_signal_stop(&h->signal);// never fail
-    return 0;
+    int rc=uv_signal_stop(&h->signal);// never fail
+    if (rc<0) return lite_uv_throw(L, rc);
+    return lite_success(L);
 }
 
 

@@ -37,14 +37,12 @@ static void walk_cb(uv_handle_t *handle, void *arg){
 }
 
 int lite_loop_gc(lua_State * L){
-    printf("%d\n",__LINE__);
     lite_loop_t * ctx=lua_touserdata(L, 1);
     lite_multi_clean(ctx);
     while (uv_loop_close(&ctx->loop)) {
         uv_walk(&ctx->loop, walk_cb, NULL);
         uv_run(&ctx->loop, UV_RUN_DEFAULT);// ignore err
     }
-    printf("%d\n",__LINE__);
     return 0;
 }
 
@@ -53,9 +51,11 @@ int lite_loop_run(lua_State * L){
     lite_loop_t * ctx = lua_touserdata(L, lua_upvalueindex(1));
     int mode;
     if (lua_gettop(L)){
-        mode=luaL_checkinteger(L,1);
+        if (lua_type(L, 1)!=LUA_TNUMBER)
+            return lite_error_invalid_arg(L);
+        mode=lua_tointeger(L,1);
         if (mode<0 || mode>2)
-            return lite_uv_throw(L, UV_EINVAL);
+            return lite_error_invalid_arg(L);
     }else
         mode=UV_RUN_DEFAULT;
     int rc=uv_run(&ctx->loop,mode);

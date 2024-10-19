@@ -96,11 +96,11 @@ static int easy_gc(lua_State * L){
 int lite_easy(lua_State * L){
     lite_loop_t * ctx = lua_touserdata(L, lua_upvalueindex(1));
     CURL * easy=curl_easy_init();
-    if (!easy) return lite_uv_throw(L, ENOMEM);
+    if (!easy) return lite_error_nomem(L);
     easy_t * leasy=lua_newuserdata(L,sizeof(easy_t));
     if (!leasy){
         curl_easy_cleanup(easy);
-        return lite_uv_throw(L, ENOMEM);
+        return lite_error_nomem(L);
     }
     curl_easy_setopt(easy, CURLOPT_ERRORBUFFER, leasy->error);
     curl_easy_setopt(easy, CURLOPT_PRIVATE,NULL);
@@ -224,8 +224,32 @@ static size_t XFERINFOFUNCTION_cb(void *userdata,
     return ret;
 }
 
+inline static int opt_key_invalid(lua_State * L){
+    lua_pushnil(L);
+    lua_pushliteral(L,"invalid value");
+    return 2;
+}
+inline static int opt_key_unavailable(lua_State * L){
+    lua_pushnil(L);
+    lua_pushliteral(L,"invalid key (unavailable)");
+    return 2;
+}
+inline static int opt_key_not_implemented(lua_State * L){
+    lua_pushnil(L);
+    lua_pushliteral(L,"invalid key (not implemented)");
+    return 2;
+}
+inline static int opt_key_reserved(lua_State * L){
+    lua_pushnil(L);
+    lua_pushliteral(L,"invalid key (reserved)");
+    return 2;
+}
+inline static int opt_key_unsupported(lua_State * L){
+    lua_pushnil(L);
+    lua_pushliteral(L,"invalid key (unsupported)");
+    return 2;
+}
 
-#define INVALID_VAL luaL_error(L,"invalid value");
 static int easy_opt(lua_State * L){
     easy_t * leasy=lua_touserdata(L,1);
     int type=lua_type(L,2);
@@ -236,7 +260,7 @@ static int easy_opt(lua_State * L){
         curl_opt=curl_easy_option_by_id(lua_tointeger(L,2));
     else
         curl_opt=NULL;
-    if (!curl_opt) return luaL_error(L,"invalid key (unavailable)");
+    if (!curl_opt) return opt_key_unavailable(L);
     type=lua_type(L, 3);
     int ret;
     switch (curl_opt->type) {
@@ -248,7 +272,7 @@ static int easy_opt(lua_State * L){
     }
     case CURLOT_VALUES:
     case CURLOT_OFF_T:{
-        if (type!=LUA_TNUMBER) return INVALID_VAL
+        if (type!=LUA_TNUMBER) return opt_key_invalid(L);
         ret=curl_easy_setopt(leasy->easy, curl_opt->id, lua_tointeger(L, 3));
         break;
     }
@@ -256,13 +280,13 @@ static int easy_opt(lua_State * L){
         const char * value;
         if (type==LUA_TNIL) value=NULL;
         else if(type==LUA_TSTRING) value=lua_tostring(L, 3);
-        else return INVALID_VAL
+        else return opt_key_invalid(L);
         ret=curl_easy_setopt(leasy->easy, curl_opt->id, value);
         break;
     }
     case CURLOT_BLOB:{
         if (type==LUA_TNIL) ret=curl_easy_setopt(leasy->easy, curl_opt->id, NULL);
-        else if (type!=LUA_TSTRING) return INVALID_VAL
+        else if (type!=LUA_TSTRING) return opt_key_invalid(L);
         else {
             struct curl_blob blob;
             blob.data=(void *)lua_tolstring(L,3,&blob.len);
@@ -286,7 +310,7 @@ static int easy_opt(lua_State * L){
             CASE_SLIST(PROXYHEADER)
             CASE_SLIST(CONNECT_TO)
             #undef CASE_SLIST
-            default:return luaL_error(L,"invalid key (not implemented)");
+            default:return opt_key_not_implemented(L);
         }
         if (type==LUA_TNIL){
             ret=curl_easy_setopt(leasy->easy,curl_opt->id,NULL);
@@ -298,8 +322,7 @@ static int easy_opt(lua_State * L){
             }
             break;
         }
-        if (type!=LUA_TTABLE) 
-            return INVALID_VAL
+        if (type!=LUA_TTABLE) return opt_key_invalid(L);
         struct curl_slist *slist=NULL;
         int len=lua_objlen(L,3);
         if (len>0){
@@ -307,8 +330,8 @@ static int easy_opt(lua_State * L){
                 lua_rawgeti(L, 3, i);
                 if (lua_type(L, -1)!=LUA_TSTRING){
                     lua_pop(L, 1);
-                    if (slist!=NULL) curl_slist_free_all(slist);
-                    return INVALID_VAL
+                    if (slist!=NULL) curl_slist_free_all(slist); 
+                    return opt_key_invalid(L);
                 }
                 slist=curl_slist_append(slist,lua_tostring(L, -1));
                 lua_pop(L, 1);
@@ -359,7 +382,7 @@ static int easy_opt(lua_State * L){
             //CASE_CB(SSH_HOSTKEY)
             #undef CASE_CB
             #undef CASE_CB_NB
-            default : return luaL_error(L,"invalid key (not implemented)");
+            default : return opt_key_not_implemented(L);
         }
         if (type==LUA_TNIL){
             ret=curl_easy_setopt(leasy->easy,curl_opt->id,NULL);
@@ -374,8 +397,7 @@ static int easy_opt(lua_State * L){
             }
             break;
         }
-        if (type!=LUA_TFUNCTION)
-            return INVALID_VAL
+        if (type!=LUA_TFUNCTION) return opt_key_invalid(L);
 
         ret=curl_easy_setopt(leasy->easy,curl_opt->id,c_ptr_cb);
         if (ret==CURLE_OK){
@@ -398,12 +420,11 @@ static int easy_opt(lua_State * L){
                 }
                 break;
             }
-            if (type!=LUA_TTABLE)
-                return INVALID_VAL
+            if (type!=LUA_TTABLE) return opt_key_invalid(L);
             curl_mime *mime;
             curl_mimepart *part;
             mime=curl_mime_init(leasy->easy);
-            if (!mime) return lite_uv_throw(L, ENOMEM);
+            if (!mime) return lite_error_nomem(L);
             int len=lua_objlen(L,3);
             if (len>0){
                 for (int i=1;i<=len;i++){
@@ -412,7 +433,7 @@ static int easy_opt(lua_State * L){
                     if (type!=LUA_TTABLE){
                         lua_pop(L, 1);
                         curl_mime_free(mime);
-                        return INVALID_VAL
+                        return opt_key_invalid(L);
                     }
                     part = curl_mime_addpart(mime);
                     lua_pushnil(L);
@@ -420,8 +441,8 @@ static int easy_opt(lua_State * L){
                         type=lua_type(L, -2);
                         if (type!=LUA_TSTRING){
                             lua_pop(L, 3);
-                            curl_mime_free(mime);
-                            return INVALID_VAL
+                            curl_mime_free(mime); 
+                            return opt_key_invalid(L);
                         }
                         type=lua_type(L,-1);
                         const char * key=lua_tostring(L, -2);
@@ -442,7 +463,7 @@ static int easy_opt(lua_State * L){
                             else{
                                 lua_pop(L, 3);
                                 curl_mime_free(mime);
-                                return INVALID_VAL
+                                return opt_key_invalid(L);
                             }
                         }/*else if (type==LUA_TTABLE && strcmp(key,"headers")==0){
 
@@ -450,7 +471,7 @@ static int easy_opt(lua_State * L){
                         else{
                             lua_pop(L, 3);
                             curl_mime_free(mime);
-                            return INVALID_VAL
+                            return opt_key_invalid(L);
                         }
                         
                         lua_pop(L, 1);
@@ -466,25 +487,28 @@ static int easy_opt(lua_State * L){
                 curl_mime_free(mime);
             break;
         }
-        return luaL_error(L, "invalid key (not implemented)"); 
-    case CURLOT_CBPTR:return luaL_error(L, "invalid key (reserved)"); 
-    default: return luaL_error(L,"invalid key (unsupported)");
+        return opt_key_not_implemented(L); 
+    case CURLOT_CBPTR:return opt_key_reserved(L);
+    default:return opt_key_unsupported(L);
     }
     if (ret!=CURLE_OK){
-        return luaL_error(L,curl_easy_strerror(ret));
+        lua_pushnil(L);
         easy_push_error(L, ret);
-        return lua_error(L);
+        return 2;
     }
-    return 0;
+    return lite_success(L);
 }
-#undef INVALID_VAL
+
+
     
 
 static void header_push_error(lua_State * L,CURLHcode rc);
 static int easy_info(lua_State * L){
     easy_t * leasy=lua_touserdata(L,1);
+    if (lua_type(L, 2)!=LUA_TSTRING)
+        return lite_error_invalid_arg(L);
     size_t sz;
-    const char * key=luaL_checklstring(L,2,&sz);
+    const char * key=lua_tolstring(L,2,&sz);
     lua_getfield(L,lua_upvalueindex(1),key);
     if (lua_type(L,-1)!=LUA_TNUMBER) {
         if (sz>5 && strncmp(key,"header",6)==0){
@@ -506,8 +530,10 @@ static int easy_info(lua_State * L){
                 }
                 return 1;
             }else if (sz==6){
+                if (lua_type(L, 3)!=LUA_TSTRING)
+                    return lite_error_invalid_arg(L);
                 struct curl_header *out;
-                const char * name=luaL_checkstring(L, 3);
+                const char * name=lua_tostring(L, 3);
                 CURLHcode rc=curl_easy_header(leasy->easy, name, 0, CURLH_HEADER, -1, &out);
                 if (rc!=CURLHE_OK){
                     header_push_error(L,rc);
@@ -517,7 +543,7 @@ static int easy_info(lua_State * L){
                 return 1;
             }
         }
-        return luaL_error(L,"invalid key (unavailable)");
+        return opt_key_unavailable(L);
     }
     int ikey=lua_tointeger(L,-1);lua_pop(L, 1);
     int ikey_type = CURLINFO_TYPEMASK & ikey;
@@ -560,13 +586,15 @@ static int easy_info(lua_State * L){
             curl_slist_free_all(out);
             return 1;
         }
-        default: return luaL_error(L,"invalid key (not implemented)");
+        default: return opt_key_not_implemented(L);
     }
 }
 
+
 static int easy_start(lua_State * L){
     easy_t * leasy=lua_touserdata(L,1);
-    luaL_checktype(L, 2, LUA_TFUNCTION);
+    if (!lua_isfunction(L, 2))
+        return lite_error_invalid_arg(L);
     lua_settop(L, 2);
     if (RF_ISSET(leasy->on[CB_IDX_DONE]))
         RF_UNSET(leasy->on[CB_IDX_DONE])
@@ -574,15 +602,14 @@ static int easy_start(lua_State * L){
     leasy->error_buf[0]='\0';
     int ret=curl_multi_add_handle(leasy->ctx->multi.handle, leasy->easy);
     if (ret!=CURLM_OK){
+        lua_pushnil(L);
         lite_multi_push_error(L, ret);
-        return lua_error(L);
+        return 2;
     }
-    return 0;
+    return lite_success(L);
 }
 
-static int easy_close(lua_State * L){
-    
-}
+
 
 static void easy_upval_info_fields(lua_State * L);
 void lite_easy_reg(lua_State * L){

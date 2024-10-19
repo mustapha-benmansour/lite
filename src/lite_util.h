@@ -197,6 +197,21 @@ struct lite_loop_t{
 
 
 
+//lite.c
+int lite_error_nomem(lua_State * L);
+int lite_error_nomem_throw(lua_State * L);
+inline int lite_success(lua_State * L){
+    lua_pushboolean(L, 1);
+    return 1;
+}
+inline int lite_error_invalid_arg(lua_State * L){
+    lua_pushnil(L);
+    lua_pushliteral(L, "EINVAL");
+    return 2;
+}
+
+
+
 //lite_loop.c
 int lite_loop_gc(lua_State * L);
 int lite_loop_run(lua_State * L);

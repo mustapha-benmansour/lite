@@ -138,6 +138,8 @@ int lite_ws_use_parser(lua_State * L,lite_handle_t * h){
 
 
 int lite_ws_build_frame(lua_State * L){
+    if (lua_type(L, 1)!=LUA_TSTRING)
+        return lite_error_invalid_arg(L);
     size_t message_len;
     const char * message=luaL_checklstring(L, 1, &message_len);
     int is_bin=lua_toboolean(L, 2);
