@@ -39,7 +39,7 @@ extern int luaopen_lite(lua_State * L){
     {
         // state_loop
         lite_loop_t * ctx=lua_newuserdata(L, sizeof(lite_loop_t));
-        if (!ctx) return lite_uv_throw(L, UV_ENOMEM);
+        if (!ctx) return lite_error_nomem_throw(ctx->L);
         ctx->errors.len=0;
         ctx->L=L;
         ctx->unexpected_gc_len=0;

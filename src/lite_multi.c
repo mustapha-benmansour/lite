@@ -139,7 +139,7 @@ static int msocket_cb(CURL *easy, curl_socket_t s, int action,lite_loop_t *ctx,v
 
 void lite_multi_init(lite_loop_t * ctx){
     ctx->multi.handle=curl_multi_init();
-    if (!ctx->multi.handle) lite_uv_throw(ctx->L, UV_ENOMEM);
+    if (!ctx->multi.handle) lite_error_nomem_throw(ctx->L);
     int rc=uv_timer_init(&ctx->loop, &ctx->multi.timer);
     if (rc<0) lite_uv_throw(ctx->L, rc);
     ctx->multi.timer.data=ctx;
