@@ -1,6 +1,8 @@
 
 
 #include "lite_util.h"
+#include <stdio.h>
+#include <uv.h>
 
 
 void lite_handle_link_req_append(lite_handle_t * h,lite_req_t * r){

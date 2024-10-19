@@ -1,5 +1,7 @@
 
+#include <curl/multi.h>
 #include <stdio.h>
+#include <uv.h>
 #ifdef LITE_CURL
 
 #include "lite_util.h"
@@ -18,9 +20,41 @@ typedef struct {
 
 
 
+void lite_multi_push_error(lua_State * L,CURLMcode rc){
+    #define ME(A) case CURLM_##A: lua_pushliteral(L,#A); return;
+    switch (rc) {
+    ME(CALL_MULTI_PERFORM)
+    ME(OK)
+    ME(BAD_HANDLE)
+    ME(BAD_EASY_HANDLE)
+    ME(OUT_OF_MEMORY)
+    ME(INTERNAL_ERROR)
+    ME(BAD_SOCKET)
+    ME(UNKNOWN_OPTION)
+    ME(ADDED_ALREADY)
+    ME(RECURSIVE_API_CALL)
+    ME(WAKEUP_FAILURE)
+    ME(BAD_FUNCTION_ARGUMENT)
+    ME(ABORTED_BY_CALLBACK)
+    ME(UNRECOVERABLE_POLL)
+    default:
+        lua_pushfstring(L,"ERROR (%d)",rc);return;
+    }
+}
+
+
 
 static void  curl_read_info(lite_loop_t * ctx){
-    printf("MULTI READ INFO");
+    CURLMsg *message;
+    int pending;
+    CURL *easy_handle;
+    while((message = curl_multi_info_read(ctx->multi.handle, &pending))) {
+        if (message->msg==CURLMSG_DONE) {
+            easy_handle = message->easy_handle;
+            curl_multi_remove_handle(ctx->multi.handle, easy_handle);
+            lite_easy_done_cb(ctx,easy_handle,message->data.result);
+        }
+    }
 }
 
 static void  timer_cb(uv_timer_t * handle){
@@ -119,9 +153,15 @@ void lite_multi_init(lite_loop_t * ctx){
 }
 
 void lite_multi_clean(lite_loop_t * ctx){
-    // stop timer
+
+    // close timer
+    if (!uv_is_closing((uv_handle_t *)&ctx->multi.timer))
+        uv_close((uv_handle_t *)&ctx->multi.timer,NULL);
+    
     // close all easy
+
     // free multi
+    curl_multi_cleanup(ctx->multi.handle);
 }
 
 

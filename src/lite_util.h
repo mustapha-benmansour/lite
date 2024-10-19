@@ -259,16 +259,14 @@ int lite_signal(lua_State * L);
 #ifdef LITE_CURL
 
 //lite_multi.c
-static inline int lite_multi_throw(lua_State * L,int rc){
-    lua_pushstring(L, curl_multi_strerror(rc));
-    return lua_error(L);
-}
+void lite_multi_push_error(lua_State * L,CURLMcode rc);
 void lite_multi_init(lite_loop_t * ctx);
 void lite_multi_clean(lite_loop_t * ctx);
 
 //lite_easy.c
 void lite_easy_reg(lua_State * L);
 int lite_easy(lua_State * L);
+void lite_easy_done_cb(lite_loop_t * ctx,CURL * easy,CURLcode rc);
 
 inline int lite_loop_easy_throw(lua_State * L,int rc){
     lua_pushstring(L, curl_easy_strerror(rc));

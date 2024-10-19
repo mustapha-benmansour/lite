@@ -1,4 +1,9 @@
 
+#include "lauxlib.h"
+#include "lua.h"
+#include <curl/curl.h>
+#include <curl/header.h>
+#include <curl/multi.h>
 #include <stdio.h>
 #ifdef LITE_CURL
 
@@ -59,6 +64,10 @@ typedef struct {
 } easy_t;
 
 
+
+static void easy_push_error(lua_State * L,CURLcode rc);
+
+
 static int easy_gc(lua_State * L){
     easy_t * leasy=lua_touserdata(L,1);
     //int * refp;
@@ -95,6 +104,7 @@ int lite_easy(lua_State * L){
     }
     curl_easy_setopt(easy, CURLOPT_ERRORBUFFER, leasy->error);
     curl_easy_setopt(easy, CURLOPT_PRIVATE,NULL);
+    curl_easy_setopt(easy, CURLOPT_PRIVATE, leasy);
     leasy->ctx=ctx;
     leasy->error=LUA_NOREF;
     for (int i=0;i<CB_IDX_LENGTH;i++)
@@ -106,6 +116,25 @@ int lite_easy(lua_State * L){
     luaL_getmetatable(L, LITE_EASY_MT);
     lua_setmetatable(L,-2);
     return 1;
+}
+
+void lite_easy_done_cb(lite_loop_t * ctx,CURL * easy,CURLcode rc){
+    easy_t * leasy;
+    lua_State * L=ctx->L;
+    curl_easy_getinfo(easy, CURLINFO_PRIVATE, &leasy);
+    RF_GET(leasy->on[CB_IDX_DONE])
+    RF_UNSET(leasy->on[CB_IDX_DONE])
+    lua_pushboolean(L, rc==CURLE_OK);
+    int n=1;
+    if (rc!=CURLE_OK){
+        easy_push_error(L,rc);
+        lua_pushinteger(L, rc);
+        n+=2;
+    }
+    if (lua_pcall(L, n, 0, 0)){
+        lite_loop_push_lua_error(&ctx->errors, L);
+        uv_stop(&ctx->loop);
+    }
 }
 
 
@@ -197,7 +226,7 @@ static size_t XFERINFOFUNCTION_cb(void *userdata,
 
 
 #define INVALID_VAL luaL_error(L,"invalid value");
-static int easy_setopt(lua_State * L){
+static int easy_opt(lua_State * L){
     easy_t * leasy=lua_touserdata(L,1);
     int type=lua_type(L,2);
     const struct curl_easyoption * curl_opt;
@@ -441,35 +470,52 @@ static int easy_setopt(lua_State * L){
     case CURLOT_CBPTR:return luaL_error(L, "invalid key (reserved)"); 
     default: return luaL_error(L,"invalid key (unsupported)");
     }
-    if (ret!=CURLE_OK)
+    if (ret!=CURLE_OK){
         return luaL_error(L,curl_easy_strerror(ret));
+        easy_push_error(L, ret);
+        return lua_error(L);
+    }
     return 0;
 }
 #undef INVALID_VAL
     
 
-static int easy_getinfo(lua_State * L){
+static void header_push_error(lua_State * L,CURLHcode rc);
+static int easy_info(lua_State * L){
     easy_t * leasy=lua_touserdata(L,1);
-    const char * key=luaL_checkstring(L,2);
+    size_t sz;
+    const char * key=luaL_checklstring(L,2,&sz);
     lua_getfield(L,lua_upvalueindex(1),key);
     if (lua_type(L,-1)!=LUA_TNUMBER) {
-        if (strncmp(key,"headers",7)==0){
-            // headers
-            lua_newtable(L);
-            struct curl_header *prev = NULL;
-            struct curl_header *h;
-            unsigned int origin = CURLH_HEADER| CURLH_1XX | CURLH_TRAILER | CURLH_CONNECT|CURLH_CONNECT;
-            int i=0;
-            while((h = curl_easy_nextheader(leasy->easy, origin, -1, prev))) {
-                lua_pushstring(L,h->name);
-                lua_pushstring(L,h->value);
-                lua_pushvalue(L,-2);
-                lua_pushvalue(L, -2);
-                lua_rawset(L,-5);
-                lua_rawseti(L,-3,++i);
-                prev = h;
+        if (sz>5 && strncmp(key,"header",6)==0){
+            if (sz==7 && key[6]=='s'){
+                // headers
+                lua_newtable(L);
+                struct curl_header *prev = NULL;
+                struct curl_header *h;
+                unsigned int origin = CURLH_HEADER;//| CURLH_1XX | CURLH_TRAILER | CURLH_CONNECT;
+                int i=0;
+                while((h = curl_easy_nextheader(leasy->easy, origin, -1, prev))) {
+                    lua_pushstring(L,h->name);
+                    lua_pushstring(L,h->value);
+                    lua_pushvalue(L,-2);
+                    lua_pushvalue(L, -2);
+                    lua_rawset(L,-5);
+                    lua_rawseti(L,-3,++i);
+                    prev = h;
+                }
+                return 1;
+            }else if (sz==6){
+                struct curl_header *out;
+                const char * name=luaL_checkstring(L, 3);
+                CURLHcode rc=curl_easy_header(leasy->easy, name, 0, CURLH_HEADER, -1, &out);
+                if (rc!=CURLHE_OK){
+                    header_push_error(L,rc);
+                    return lua_error(L);
+                }
+                lua_pushstring(L, out->value);
+                return 1;
             }
-            return 1;
         }
         return luaL_error(L,"invalid key (unavailable)");
     }
@@ -516,11 +562,9 @@ static int easy_getinfo(lua_State * L){
         }
         default: return luaL_error(L,"invalid key (not implemented)");
     }
-    
-    //return luaL_error(L,"invalid key (unavailable)");
 }
 
-static int easy_perform(lua_State * L){
+static int easy_start(lua_State * L){
     easy_t * leasy=lua_touserdata(L,1);
     luaL_checktype(L, 2, LUA_TFUNCTION);
     lua_settop(L, 2);
@@ -529,25 +573,237 @@ static int easy_perform(lua_State * L){
     RF_SET(leasy->on[CB_IDX_DONE])
     leasy->error_buf[0]='\0';
     int ret=curl_multi_add_handle(leasy->ctx->multi.handle, leasy->easy);
-    if (ret!=CURLM_OK)
-        return luaL_error(L, curl_multi_strerror(ret));
+    if (ret!=CURLM_OK){
+        lite_multi_push_error(L, ret);
+        return lua_error(L);
+    }
     return 0;
 }
 
+static int easy_close(lua_State * L){
+    
+}
 
+static void easy_upval_info_fields(lua_State * L);
 void lite_easy_reg(lua_State * L){
     luaL_newmetatable(L, LITE_EASY_MT);
     lua_pushvalue(L, -1);
     lua_setfield(L, -2, "__index");
+
+    easy_upval_info_fields(L);
+    lua_pushcclosure(L, easy_info, 1);
+    lua_setfield(L, -2, "info");
+
     static const luaL_Reg easy_mt[] = {
         {"__gc",easy_gc},
-        {"setopt",easy_setopt},
-        {"getinfo",easy_getinfo},
-        {"perform",easy_perform},
+        {"opt",easy_opt},
+        {"perform",easy_start},
         {NULL,NULL}
     };
     luaL_setfuncs(L, easy_mt, 0);
     lua_pop(L, 1);
 }
+
+
+
+
+
+
+
+static void header_push_error(lua_State * L,CURLHcode rc){
+    #define HE(A) case CURLHE_##A: lua_pushliteral(L,#A); return;
+    switch (rc) {
+    HE(OK)
+    HE(BADINDEX)
+    HE(MISSING)
+    HE(NOHEADERS)
+    HE(NOREQUEST)
+    HE(OUT_OF_MEMORY)
+    HE(NOT_BUILT_IN)
+    default:
+        lua_pushfstring(L,"ERROR (%d)",rc);return;
+    }
+}
+static void easy_upval_info_fields(lua_State * L){
+    lua_newtable(L);
+    #define IF(A,a) lua_pushstring(L,a);lua_pushinteger(L,CURLINFO_##A);lua_rawset(L,-3);
+    IF(EFFECTIVE_URL,"effective_url")
+    IF(RESPONSE_CODE,"response_code")
+    IF(TOTAL_TIME,"total_time")
+    IF(NAMELOOKUP_TIME,"namelookup_time")
+    IF(CONNECT_TIME,"connect_time")
+    IF(PRETRANSFER_TIME,"pretransfer_time")
+    IF(SIZE_UPLOAD_T,"size_upload_t")
+    IF(SIZE_DOWNLOAD_T,"size_download_t")
+    IF(SPEED_DOWNLOAD_T,"speed_download_t")
+    IF(SPEED_UPLOAD_T,"speed_upload_t")
+    IF(HEADER_SIZE,"header_size")
+    IF(REQUEST_SIZE,"request_size")
+    IF(SSL_VERIFYRESULT,"ssl_verifyresult")
+    IF(FILETIME,"filetime")
+    IF(FILETIME_T,"filetime_t")
+    IF(CONTENT_LENGTH_DOWNLOAD_T,"content_length_download_t")
+    IF(CONTENT_LENGTH_UPLOAD_T,"content_length_upload_t")
+    IF(STARTTRANSFER_TIME,"starttransfer_time")
+    IF(CONTENT_TYPE,"content_type")
+    IF(REDIRECT_TIME,"redirect_time")
+    IF(REDIRECT_COUNT,"redirect_count")
+    IF(PRIVATE,"private")
+    IF(HTTP_CONNECTCODE,"http_connectcode")
+    IF(HTTPAUTH_AVAIL,"httpauth_avail")
+    IF(PROXYAUTH_AVAIL,"proxyauth_avail")
+    IF(OS_ERRNO,"os_errno")
+    IF(NUM_CONNECTS,"num_connects")
+    IF(SSL_ENGINES,"ssl_engines")
+    IF(COOKIELIST,"cookielist")
+    IF(FTP_ENTRY_PATH,"ftp_entry_path")
+    IF(REDIRECT_URL,"redirect_url")
+    IF(PRIMARY_IP,"primary_ip")
+    IF(APPCONNECT_TIME,"appconnect_time")
+    IF(CERTINFO,"certinfo")
+    IF(CONDITION_UNMET,"condition_unmet")
+    IF(RTSP_SESSION_ID,"rtsp_session_id")
+    IF(RTSP_CLIENT_CSEQ,"rtsp_client_cseq")
+    IF(RTSP_SERVER_CSEQ,"rtsp_server_cseq")
+    IF(RTSP_CSEQ_RECV,"rtsp_cseq_recv")
+    IF(PRIMARY_PORT,"primary_port")
+    IF(LOCAL_IP,"local_ip")
+    IF(LOCAL_PORT,"local_port")
+    IF(ACTIVESOCKET,"activesocket")
+    IF(TLS_SSL_PTR,"tls_ssl_ptr")
+    IF(HTTP_VERSION,"http_version")
+    IF(PROXY_SSL_VERIFYRESULT,"proxy_ssl_verifyresult")
+    IF(SCHEME,"scheme")
+    IF(TOTAL_TIME_T,"total_time_t")
+    IF(NAMELOOKUP_TIME_T,"namelookup_time_t")
+    IF(CONNECT_TIME_T,"connect_time_t")
+    IF(PRETRANSFER_TIME_T,"pretransfer_time_t")
+    IF(STARTTRANSFER_TIME_T,"starttransfer_time_t")
+    IF(REDIRECT_TIME_T,"redirect_time_t")
+    IF(APPCONNECT_TIME_T,"appconnect_time_t")
+    IF(RETRY_AFTER,"retry_after")
+    IF(EFFECTIVE_METHOD,"effective_method")
+    IF(PROXY_ERROR,"proxy_error")
+    IF(REFERER,"referer")
+    IF(CAINFO,"cainfo")
+    IF(CAPATH,"capath")
+    IF(XFER_ID,"xfer_id")
+    IF(CONN_ID,"conn_id")
+    IF(QUEUE_TIME_T,"queue_time_t")
+    IF(USED_PROXY,"used_proxy")
+    #undef IF
+}
+
+static void easy_push_error(lua_State * L,CURLcode rc){
+    #define EE(A) case CURLE_##A: lua_pushliteral(L,#A); return;
+    switch (rc) {
+    EE(OK)
+    EE(UNSUPPORTED_PROTOCOL)
+    EE(FAILED_INIT)
+    EE(URL_MALFORMAT)
+    EE(NOT_BUILT_IN)
+    EE(COULDNT_RESOLVE_PROXY)
+    EE(COULDNT_RESOLVE_HOST)
+    EE(COULDNT_CONNECT)
+    EE(WEIRD_SERVER_REPLY)
+    EE(REMOTE_ACCESS_DENIED)
+    EE(FTP_ACCEPT_FAILED)
+    EE(FTP_WEIRD_PASS_REPLY)
+    EE(FTP_ACCEPT_TIMEOUT)
+    EE(FTP_WEIRD_PASV_REPLY)
+    EE(FTP_WEIRD_227_FORMAT)
+    EE(FTP_CANT_GET_HOST)
+    EE(HTTP2)
+    EE(FTP_COULDNT_SET_TYPE)
+    EE(PARTIAL_FILE)
+    EE(FTP_COULDNT_RETR_FILE)
+    EE(OBSOLETE20)
+    EE(QUOTE_ERROR)
+    EE(HTTP_RETURNED_ERROR)
+    EE(WRITE_ERROR)
+    EE(OBSOLETE24)
+    EE(UPLOAD_FAILED)
+    EE(READ_ERROR)
+    EE(OUT_OF_MEMORY)
+    EE(OPERATION_TIMEDOUT)
+    EE(OBSOLETE29)
+    EE(FTP_PORT_FAILED)
+    EE(FTP_COULDNT_USE_REST)
+    EE(OBSOLETE32)
+    EE(RANGE_ERROR)
+    EE(HTTP_POST_ERROR)
+    EE(SSL_CONNECT_ERROR)
+    EE(BAD_DOWNLOAD_RESUME)
+    EE(FILE_COULDNT_READ_FILE)
+    EE(LDAP_CANNOT_BIND)
+    EE(LDAP_SEARCH_FAILED)
+    EE(OBSOLETE40)
+    EE(FUNCTION_NOT_FOUND)
+    EE(ABORTED_BY_CALLBACK)
+    EE(BAD_FUNCTION_ARGUMENT)
+    EE(OBSOLETE44)
+    EE(INTERFACE_FAILED)
+    EE(OBSOLETE46)
+    EE(TOO_MANY_REDIRECTS)
+    EE(UNKNOWN_OPTION)
+    EE(SETOPT_OPTION_SYNTAX)
+    EE(OBSOLETE50)
+    EE(OBSOLETE51)
+    EE(GOT_NOTHING)
+    EE(SSL_ENGINE_NOTFOUND)
+    EE(SSL_ENGINE_SETFAILED)
+    EE(SEND_ERROR)
+    EE(RECV_ERROR)
+    EE(OBSOLETE57)
+    EE(SSL_CERTPROBLEM)
+    EE(SSL_CIPHER)
+    EE(PEER_FAILED_VERIFICATION)
+    EE(BAD_CONTENT_ENCODING)
+    EE(OBSOLETE62)
+    EE(FILESIZE_EXCEEDED)
+    EE(USE_SSL_FAILED)
+    EE(SEND_FAIL_REWIND)
+    EE(SSL_ENGINE_INITFAILED)
+    EE(LOGIN_DENIED)
+    EE(TFTP_NOTFOUND)
+    EE(TFTP_PERM)
+    EE(REMOTE_DISK_FULL)
+    EE(TFTP_ILLEGAL)
+    EE(TFTP_UNKNOWNID)
+    EE(REMOTE_FILE_EXISTS)
+    EE(TFTP_NOSUCHUSER)
+    EE(OBSOLETE75)
+    EE(OBSOLETE76)
+    EE(SSL_CACERT_BADFILE)
+    EE(REMOTE_FILE_NOT_FOUND)
+    EE(SSH)
+    EE(SSL_SHUTDOWN_FAILED)
+    EE(AGAIN)
+    EE(SSL_CRL_BADFILE)
+    EE(SSL_ISSUER_ERROR)
+    EE(FTP_PRET_FAILED)
+    EE(RTSP_CSEQ_ERROR)
+    EE(RTSP_SESSION_ERROR)
+    EE(FTP_BAD_FILE_LIST)
+    EE(CHUNK_FAILED)
+    EE(NO_CONNECTION_AVAILABLE)
+    EE(SSL_PINNEDPUBKEYNOTMATCH)
+    EE(SSL_INVALIDCERTSTATUS)
+    EE(HTTP2_STREAM)
+    EE(RECURSIVE_API_CALL)
+    EE(AUTH_ERROR)
+    EE(HTTP3)
+    EE(QUIC_CONNECT_ERROR)
+    EE(PROXY)
+    EE(SSL_CLIENTCERT)
+    EE(UNRECOVERABLE_POLL)
+    EE(TOO_LARGE)
+    EE(ECH_REQUIRED)
+    default:
+        lua_pushfstring(L,"ERROR (%d)",rc);return;
+    }
+}
+
+
 
 #endif

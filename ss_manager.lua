@@ -1,17 +1,26 @@
 
 
 
-
+print('here')
 
 local lite=require'lite'
-
+print('here')
 local e=lite.easy()
 
+e.url='http://google.com'
+
+e.writefunction=function(...)
+    print('writefunction',...)
+end
+
+e(function (...)
+    print('perform',...)
+end)
 print(e)
 
 
 do 
-    --lite.run() 
+    lite.run() 
     return 
 end
 

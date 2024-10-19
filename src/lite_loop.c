@@ -5,6 +5,7 @@
 #include "lite_util.h"
 #include "lua.h"
 #include <stdio.h>
+#include <uv.h>
 
 #define LITE_LOOP_MT "lite.loop"
 
@@ -38,6 +39,7 @@ static void walk_cb(uv_handle_t *handle, void *arg){
 int lite_loop_gc(lua_State * L){
     printf("%d\n",__LINE__);
     lite_loop_t * ctx=lua_touserdata(L, 1);
+    lite_multi_clean(ctx);
     while (uv_loop_close(&ctx->loop)) {
         uv_walk(&ctx->loop, walk_cb, NULL);
         uv_run(&ctx->loop, UV_RUN_DEFAULT);// ignore err
